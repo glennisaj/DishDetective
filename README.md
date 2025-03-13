@@ -159,3 +159,4 @@ npm run dev
 
 ## License
 [Your chosen license]
+# DishDetective
