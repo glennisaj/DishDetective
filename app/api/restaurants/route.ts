@@ -2,8 +2,19 @@ import { NextResponse } from 'next/server';
 import { extractPlaceDetails, fetchPlaceReviews, formatPlaceData } from '@/lib/maps';
 import { analyzeReviews } from '@/lib/ai';
 import { env } from '@/env.mjs';
+import { isValidGoogleMapsUrl } from '@/lib/validation';
+import { RateLimiter } from '@/app/utils/rateLimiting';
+
+// Create a rate limiter instance
+const rateLimiter = new RateLimiter(60); // 60 requests per minute
 
 export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const url = searchParams.get("url");
+  const id = searchParams.get("id");
+
+  console.log("Processing request for:", { url, id });
+
   try {
     // First, verify API keys are loaded
     if (!env.GOOGLE_MAPS_API_KEY || !env.OPENAI_API_KEY) {
@@ -14,73 +25,58 @@ export async function GET(request: Request) {
       );
     }
 
-    const { searchParams } = new URL(request.url);
-    const url = searchParams.get('url');
-    const id = searchParams.get('id');
+    // Rate limit the request and store the result
+    const result = await rateLimiter.add(async () => {
+      console.log("Fetching place details...");
+      let placeDetails;
 
-    console.log('Processing request for:', { url, id });
+      if (url) {
+        // Validate URL format
+        if (!isValidGoogleMapsUrl(url)) {
+          throw new Error("Invalid Google Maps URL");
+        }
+        placeDetails = await extractPlaceDetails(url);
+      } else if (id) {
+        // Pass the ID directly instead of constructing a URL
+        placeDetails = await extractPlaceDetails(id, true);  // Add a flag to indicate this is an ID
+      } else {
+        throw new Error("Either url or id parameter is required");
+      }
 
-    if (!url && !id) {
-      return NextResponse.json(
-        { error: 'URL or ID parameter is required' },
-        { status: 400 }
-      );
-    }
+      console.log('Place details received:', {
+        id: placeDetails.id,
+        name: placeDetails.name,
+      });
 
-    // Get place details
-    console.log('Fetching place details...');
-    const placeDetails = url 
-      ? await extractPlaceDetails(url)
-      : await fetchPlaceDetailsById(id!);
-    
-    console.log('Place details received:', {
-      id: placeDetails.id,
-      name: placeDetails.name,
+      // Fetch reviews
+      console.log('Fetching reviews...');
+      const reviews = await fetchPlaceReviews(placeDetails.id);
+      console.log(`Received ${reviews.length} reviews`);
+
+      // Only proceed with AI analysis if we have reviews
+      if (reviews.length === 0) {
+        return formatPlaceData(placeDetails, {
+          topDishes: [],
+          analyzedReviewCount: 0
+        });
+      }
+
+      // Analyze reviews with AI
+      console.log('Starting AI analysis...');
+      const analysis = await analyzeReviews(reviews);
+      console.log('AI analysis complete:', analysis);
+
+      // Format and return the data
+      return formatPlaceData(placeDetails, analysis);
     });
 
-    // Fetch reviews
-    console.log('Fetching reviews...');
-    const reviews = await fetchPlaceReviews(placeDetails.id);
-    console.log(`Received ${reviews.length} reviews:`, {
-      firstReview: reviews[0],
-      lastReview: reviews[reviews.length - 1]
-    });
+    // Return the final response
+    return NextResponse.json(result);
 
-    // Only proceed with AI analysis if we have reviews
-    if (reviews.length === 0) {
-      console.log('No reviews available for analysis');
-      return NextResponse.json(formatPlaceData(placeDetails, {
-        topDishes: [],
-        analyzedReviewCount: 0
-      }));
-    }
-
-    // Analyze reviews with AI
-    console.log('Starting AI analysis...');
-    const reviewAnalysis = await analyzeReviews(reviews);
-    console.log('AI analysis complete:', reviewAnalysis);
-
-    // Format the data
-    const formattedData = formatPlaceData(placeDetails, reviewAnalysis);
-    console.log('Final formatted data:', formattedData);
-
-    return NextResponse.json(formattedData);
-    
   } catch (error) {
-    console.error('API Route Error:', {
-      name: error instanceof Error ? error.name : 'Unknown',
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined
-    });
-
+    console.error('API Route Error:', error);
     return NextResponse.json(
-      { 
-        error: error instanceof Error ? error.message : 'Failed to fetch restaurant data',
-        details: process.env.NODE_ENV === 'development' ? {
-          message: error instanceof Error ? error.message : 'Unknown error',
-          type: error instanceof Error ? error.name : 'Unknown'
-        } : undefined
-      },
+      { error: error instanceof Error ? error.message : 'Failed to process restaurant data' },
       { status: 500 }
     );
   }

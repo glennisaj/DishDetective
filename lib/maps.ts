@@ -7,15 +7,16 @@ const DAILY_LIMIT = 1000; // Adjust based on your API quota
 /**
  * Main function to extract restaurant details from a Google Maps URL
  */
-export async function extractPlaceDetails(url: string) {
+export async function extractPlaceDetails(input: string, isDirectId: boolean = false) {
   try {
-    console.log('Starting place details extraction for URL:', url);
+    console.log('Starting place details extraction for:', isDirectId ? 'ID' : 'URL', input);
     
-    const placeId = await extractPlaceIdFromUrl(url);
-    console.log('Extracted place ID:', placeId);
+    // If it's a direct ID, use it; otherwise extract it from URL
+    const placeId = isDirectId ? input : await extractPlaceIdFromUrl(input);
+    console.log('Using place ID:', placeId);
     
     if (!placeId) {
-      throw new Error('Could not extract place ID from URL');
+      throw new Error('Could not get valid place ID');
     }
 
     // Fetch place details directly
@@ -54,7 +55,7 @@ export async function extractPlaceDetails(url: string) {
     
     // Return the formatted data
     return {
-      id: placeId,  // Use the placeId we extracted
+      id: placeId,
       name: data.displayName?.text,
       formatted_address: data.formattedAddress,
       rating: data.rating,
